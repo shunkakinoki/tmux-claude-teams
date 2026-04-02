@@ -1,6 +1,6 @@
 # tmux-claude-teams
 
-Visualize Claude Code agent teams as native tmux pane splits. When Claude spawns subagents, each one appears as a pane stacked on the right. Works with any Claude Code session in tmux - no special launcher needed.
+Visualize Claude Code agent teams as native tmux pane splits. When Claude spawns subagents, each one appears as a pane stacked on the right.
 
 ```
 +------------------+--------+
@@ -21,33 +21,60 @@ Visualize Claude Code agent teams as native tmux pane splits. When Claude spawns
 
 ## Install
 
+Clone the repo:
+
 ```bash
-git clone https://github.com/shunkakinoki/tmux-claude-teams ~/ghq/github.com/shunkakinoki/tmux-claude-teams
+git clone https://github.com/shunkakinoki/tmux-claude-teams ~/.tmux/plugins/tmux-claude-teams
 ```
 
-Run setup (builds binaries, installs Claude Code hooks):
+Add to `~/.tmux.conf`:
 
 ```bash
-~/ghq/github.com/shunkakinoki/tmux-claude-teams/scripts/setup.sh
+run-shell ~/.tmux/plugins/tmux-claude-teams/claude-teams.tmux
 ```
 
-Add to `~/.tmux.conf` (or tmux.conf managed by home-manager):
+Add hooks to `~/.claude/settings.json` (adjust paths if you cloned elsewhere):
 
-```bash
-run-shell ~/ghq/github.com/shunkakinoki/tmux-claude-teams/claude-teams.tmux
+```json
+{
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Agent",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "CLAUDE_TEAMS_SOCKET=/tmp/claude-teams.sock CLAUDE_TEAMS_SEND=~/.tmux/plugins/tmux-claude-teams/daemon/bin/send CLAUDE_TEAMS_TMUX=tmux ~/.tmux/plugins/tmux-claude-teams/hooks/pre-tool-use.sh",
+            "timeout": 5000
+          }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "matcher": "Agent",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "CLAUDE_TEAMS_SOCKET=/tmp/claude-teams.sock CLAUDE_TEAMS_SEND=~/.tmux/plugins/tmux-claude-teams/daemon/bin/send ~/.tmux/plugins/tmux-claude-teams/hooks/post-tool-use.sh",
+            "timeout": 5000
+          }
+        ]
+      }
+    ]
+  }
+}
 ```
 
 Reload tmux:
 
 ```bash
-tmux source-file ~/.config/tmux/tmux.conf
+tmux source-file ~/.tmux.conf
 ```
 
 ## Usage
 
-Just use `claude` normally in any tmux pane. When Claude spawns agents, they appear as splits.
-
-The daemon starts automatically when tmux loads. Hooks in `~/.claude/settings.json` intercept Agent tool calls and notify the daemon to create/destroy panes.
+Use `claude` in any tmux pane. Agents appear as splits automatically.
 
 ## How it works
 
@@ -56,14 +83,10 @@ Claude Code --[hooks]--> hook scripts --[unix socket]--> Go daemon ---> tmux pan
 ```
 
 1. Daemon starts on tmux init, listens on `/tmp/claude-teams.sock`
-2. Claude Code `PreToolUse` hook fires when Agent tool is called
+2. `PreToolUse` hook fires when Agent tool is called
 3. Hook script detects which tmux pane Claude is in (PID walk)
 4. Daemon creates a split pane showing agent status
-5. `PostToolUse` hook notifies completion, pane auto-closes after 3s
-
-## Uninstall
-
-Remove hooks from `~/.claude/settings.json` (entries containing "claude-teams") and remove the `run-shell` line from tmux.conf.
+5. `PostToolUse` hook fires on completion, pane auto-closes after 3s
 
 ## License
 
