@@ -17,16 +17,21 @@ SHIM
 chmod +x "$SHIM_DIR/tmux"
 
 # Read optional claude binary path from tmux option
-CLAUDE_BIN="$(tmux show-option -gqv @claude-teams-claude-bin)"
+CLAUDE_BIN="$($REAL_TMUX show-option -gqv @claude-teams-claude-bin)"
 CLAUDE_BIN="${CLAUDE_BIN:-claude}"
 
-# Launch claude in a new right pane as the leader
-tmux split-window -h -p 50 "
-  export PATH=\"$SHIM_DIR:\$PATH\"
-  export CLAUDE_TEAMS_REAL_TMUX=\"$REAL_TMUX\"
-  export CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS=1
-  $CLAUDE_BIN --teammate-mode auto
-  exec \$SHELL
-"
+# Get current tmux context
+TMUX_VAL="$($REAL_TMUX display-message -p '#{socket_path},#{session_id},#{window_id}')"
+TMUX_PANE_VAL="$($REAL_TMUX display-message -p '#{pane_id}')"
 
-tmux select-layout main-vertical
+# Launch claude in a new right pane as the leader
+$REAL_TMUX split-window -h -p 50 "\
+  export PATH='$SHIM_DIR':\$PATH; \
+  export CLAUDE_TEAMS_REAL_TMUX='$REAL_TMUX'; \
+  export CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS=1; \
+  export TMUX='$TMUX_VAL'; \
+  export TMUX_PANE='$TMUX_PANE_VAL'; \
+  $CLAUDE_BIN; \
+  exec \$SHELL"
+
+$REAL_TMUX select-layout main-vertical
