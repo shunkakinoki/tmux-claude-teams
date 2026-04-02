@@ -24,13 +24,15 @@ CLAUDE_BIN="${CLAUDE_BIN:-claude}"
 CLAUDE_ABS="$(which "$CLAUDE_BIN" 2>/dev/null || echo "$CLAUDE_BIN")"
 
 # Create a wrapper script that sets env and runs claude
+# NODE_OPTIONS injects --agent-teams into process.argv so the feature
+# gate passes without the CLI option parser rejecting it.
 WRAPPER="$SHIM_DIR/claude-teams-wrapper.sh"
 cat > "$WRAPPER" << EOF
 #!/usr/bin/env bash
 export PATH="$SHIM_DIR:\$PATH"
 export CLAUDE_TEAMS_REAL_TMUX="$REAL_TMUX"
 export CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS=1
-exec "$CLAUDE_ABS" --agent-teams "\$@"
+exec "$CLAUDE_ABS" "\$@"
 EOF
 chmod +x "$WRAPPER"
 
