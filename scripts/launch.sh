@@ -20,18 +20,20 @@ chmod +x "$SHIM_DIR/tmux"
 CLAUDE_BIN="$($REAL_TMUX show-option -gqv @claude-teams-claude-bin)"
 CLAUDE_BIN="${CLAUDE_BIN:-claude}"
 
-# Get current tmux context
-TMUX_VAL="$($REAL_TMUX display-message -p '#{socket_path},#{session_id},#{window_id}')"
-TMUX_PANE_VAL="$($REAL_TMUX display-message -p '#{pane_id}')"
+# Resolve claude to absolute path before shimming PATH
+CLAUDE_ABS="$(which "$CLAUDE_BIN" 2>/dev/null || echo "$CLAUDE_BIN")"
 
-# Launch claude in a new right pane as the leader
-$REAL_TMUX split-window -h -p 50 "\
-  export PATH='$SHIM_DIR':\$PATH; \
-  export CLAUDE_TEAMS_REAL_TMUX='$REAL_TMUX'; \
-  export CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS=1; \
-  export TMUX='$TMUX_VAL'; \
-  export TMUX_PANE='$TMUX_PANE_VAL'; \
-  $CLAUDE_BIN; \
-  exec \$SHELL"
+# Create a wrapper script that sets env and runs claude
+WRAPPER="$SHIM_DIR/claude-teams-wrapper.sh"
+cat > "$WRAPPER" << EOF
+#!/usr/bin/env bash
+export PATH="$SHIM_DIR:\$PATH"
+export CLAUDE_TEAMS_REAL_TMUX="$REAL_TMUX"
+export CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS=1
+exec "$CLAUDE_ABS" "\$@"
+EOF
+chmod +x "$WRAPPER"
 
+# Launch wrapper in a new right pane
+$REAL_TMUX split-window -h -p 50 "$WRAPPER"
 $REAL_TMUX select-layout main-vertical
