@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"flag"
-	"fmt"
 	"log"
 	"net"
 	"os"
@@ -19,34 +18,32 @@ import (
 type AgentEvent struct {
 	Event       string `json:"event"`
 	AgentID     string `json:"agent_id"`
+	PaneID      string `json:"pane_id"`
 	Description string `json:"description,omitempty"`
 	Result      string `json:"result,omitempty"`
 }
 
 type AgentState struct {
-	PaneID      string
+	AgentPaneID string // the new pane created for this agent
+	LeaderPane  string // the pane Claude is running in
 	Description string
 	StatusFile  string
 }
 
 var (
-	agents     = make(map[string]*AgentState)
-	mu         sync.Mutex
-	tmuxBin    string
-	targetPane string
-	pluginDir  string
+	agents    = make(map[string]*AgentState)
+	mu        sync.Mutex
+	tmuxBin   string
+	pluginDir string
 )
 
 func main() {
 	socketPath := flag.String("socket", "/tmp/claude-teams.sock", "unix socket path")
 	tmux := flag.String("tmux", "tmux", "path to real tmux binary")
-	pane := flag.String("pane", "", "target tmux pane ID")
 	dir := flag.String("plugin-dir", "", "plugin directory")
-	parentPID := flag.Int("parent-pid", 0, "parent PID to watch")
 	flag.Parse()
 
 	tmuxBin = *tmux
-	targetPane = *pane
 	pluginDir = *dir
 
 	os.Remove(*socketPath)
@@ -61,12 +58,6 @@ func main() {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	// Watch parent process
-	if *parentPID > 0 {
-		go watchParent(*parentPID, cancel)
-	}
-
-	// Handle signals
 	sig := make(chan os.Signal, 1)
 	signal.Notify(sig, syscall.SIGTERM, syscall.SIGINT)
 	go func() {
@@ -77,13 +68,12 @@ func main() {
 		}
 	}()
 
-	// Close listener when context is done
 	go func() {
 		<-ctx.Done()
 		listener.Close()
 	}()
 
-	log.Printf("daemon started on %s (watching pane %s)", *socketPath, targetPane)
+	log.Printf("daemon started on %s", *socketPath)
 
 	for {
 		conn, err := listener.Accept()
@@ -97,17 +87,6 @@ func main() {
 	}
 
 	cleanup()
-}
-
-func watchParent(pid int, cancel context.CancelFunc) {
-	for {
-		if err := syscall.Kill(pid, 0); err != nil {
-			log.Printf("parent %d exited, shutting down", pid)
-			cancel()
-			return
-		}
-		time.Sleep(2 * time.Second)
-	}
 }
 
 func handleConn(conn net.Conn) {
@@ -137,18 +116,23 @@ func handleAgentStart(evt AgentEvent) {
 		return
 	}
 
+	leaderPane := evt.PaneID
+	if leaderPane == "" {
+		log.Printf("agent_start: no pane_id, skipping")
+		return
+	}
+
 	// Create status file
-	statusFile := fmt.Sprintf("/tmp/claude-teams-agent-%s.status", sanitizeID(evt.AgentID))
+	statusFile := "/tmp/claude-teams-agent-" + sanitizeID(evt.AgentID) + ".status"
 	desc := evt.Description
 	if len(desc) > 200 {
 		desc = desc[:200] + "..."
 	}
 	os.WriteFile(statusFile, []byte("RUNNING\n"+desc), 0644)
 
-	// Create tmux split pane running pane-status.sh
+	// Create tmux split pane
 	paneScript := pluginDir + "/scripts/pane-status.sh"
-	cmd := exec.Command(tmuxBin, "split-window", "-h", "-t", targetPane,
-		fmt.Sprintf("%s %s", paneScript, statusFile))
+	cmd := exec.Command(tmuxBin, "split-window", "-h", "-t", leaderPane, paneScript+" "+statusFile)
 	if err := cmd.Run(); err != nil {
 		log.Printf("split-window failed: %v", err)
 		os.Remove(statusFile)
@@ -161,18 +145,19 @@ func handleAgentStart(evt AgentEvent) {
 		log.Printf("display-message failed: %v", err)
 		return
 	}
-	paneID := strings.TrimSpace(string(out))
+	agentPaneID := strings.TrimSpace(string(out))
 
-	// Rebalance layout
-	exec.Command(tmuxBin, "select-layout", "-t", targetPane, "main-vertical").Run()
+	// Rebalance: leader left, agents stacked right
+	exec.Command(tmuxBin, "select-layout", "-t", leaderPane, "main-vertical").Run()
 
 	agents[evt.AgentID] = &AgentState{
-		PaneID:      paneID,
+		AgentPaneID: agentPaneID,
+		LeaderPane:  leaderPane,
 		Description: desc,
 		StatusFile:  statusFile,
 	}
 
-	log.Printf("agent_start: %s -> pane %s (%s)", evt.AgentID, paneID, desc)
+	log.Printf("agent_start: %s -> pane %s (leader %s, %s)", evt.AgentID, agentPaneID, leaderPane, desc)
 }
 
 func handleAgentStop(evt AgentEvent) {
@@ -185,7 +170,6 @@ func handleAgentStop(evt AgentEvent) {
 	delete(agents, evt.AgentID)
 	mu.Unlock()
 
-	// Update status file to DONE
 	result := evt.Result
 	if result == "" {
 		result = "completed"
@@ -195,13 +179,12 @@ func handleAgentStop(evt AgentEvent) {
 	}
 	os.WriteFile(agent.StatusFile, []byte("DONE\n"+result), 0644)
 
-	log.Printf("agent_stop: %s (pane %s)", evt.AgentID, agent.PaneID)
+	log.Printf("agent_stop: %s (pane %s)", evt.AgentID, agent.AgentPaneID)
 
-	// Wait for pane-status.sh to show the result, then kill pane
 	go func() {
 		time.Sleep(3 * time.Second)
-		exec.Command(tmuxBin, "kill-pane", "-t", agent.PaneID).Run()
-		exec.Command(tmuxBin, "select-layout", "-t", targetPane, "main-vertical").Run()
+		exec.Command(tmuxBin, "kill-pane", "-t", agent.AgentPaneID).Run()
+		exec.Command(tmuxBin, "select-layout", "-t", agent.LeaderPane, "main-vertical").Run()
 		os.Remove(agent.StatusFile)
 	}()
 }
@@ -210,7 +193,7 @@ func cleanup() {
 	mu.Lock()
 	defer mu.Unlock()
 	for id, agent := range agents {
-		exec.Command(tmuxBin, "kill-pane", "-t", agent.PaneID).Run()
+		exec.Command(tmuxBin, "kill-pane", "-t", agent.AgentPaneID).Run()
 		os.Remove(agent.StatusFile)
 		delete(agents, id)
 	}

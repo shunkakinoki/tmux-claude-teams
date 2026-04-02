@@ -1,12 +1,12 @@
 # tmux-claude-teams
 
-Spawn Claude Code agent teams as native tmux pane splits. Subagents stack vertically in a right column and auto-equalize as they spawn and exit.
+Visualize Claude Code agent teams as native tmux pane splits. When Claude spawns subagents, each one appears as a pane stacked on the right. Works with any Claude Code session in tmux - no special launcher needed.
 
 ```
 +------------------+--------+
 |                  | Agent1 |
 |                  +--------+
-|  Leader (you)    | Agent2 |
+|  Claude Code     | Agent2 |
 |                  +--------+
 |                  | Agent3 |
 +------------------+--------+
@@ -18,62 +18,52 @@ Spawn Claude Code agent teams as native tmux pane splits. Subagents stack vertic
 - Go >= 1.23
 - jq
 - [Claude Code CLI](https://docs.anthropic.com/en/docs/claude-code)
-- [TPM](https://github.com/tmux-plugins/tpm) (optional)
 
 ## Install
 
-### With TPM
-
-Add to `~/.tmux.conf`:
-
 ```bash
-set -g @plugin 'shunkakinoki/tmux-claude-teams'
+git clone https://github.com/shunkakinoki/tmux-claude-teams ~/ghq/github.com/shunkakinoki/tmux-claude-teams
 ```
 
-Reload tmux, then press `prefix + I` to install.
-
-### Manual
+Run setup (builds binaries, installs Claude Code hooks):
 
 ```bash
-git clone https://github.com/shunkakinoki/tmux-claude-teams ~/.tmux/plugins/tmux-claude-teams
+~/ghq/github.com/shunkakinoki/tmux-claude-teams/scripts/setup.sh
 ```
 
-Add to `~/.tmux.conf`:
+Add to `~/.tmux.conf` (or tmux.conf managed by home-manager):
 
 ```bash
-run-shell ~/.tmux/plugins/tmux-claude-teams/claude-teams.tmux
+run-shell ~/ghq/github.com/shunkakinoki/tmux-claude-teams/claude-teams.tmux
+```
+
+Reload tmux:
+
+```bash
+tmux source-file ~/.config/tmux/tmux.conf
 ```
 
 ## Usage
 
-`prefix + T` - launches Claude Code with agent teams in the current window.
+Just use `claude` normally in any tmux pane. When Claude spawns agents, they appear as splits.
 
-When Claude spawns subagents via the Agent tool, each one appears as a pane stacked on the right. Panes auto-close 3 seconds after the agent completes.
+The daemon starts automatically when tmux loads. Hooks in `~/.claude/settings.json` intercept Agent tool calls and notify the daemon to create/destroy panes.
 
 ## How it works
 
-1. A Go daemon listens on a unix socket for agent lifecycle events
-2. Claude Code hooks (`PreToolUse`/`PostToolUse`) notify the daemon when agents spawn/complete
-3. The daemon creates/destroys tmux panes and rebalances with `main-vertical` layout
-4. On exit, hooks config is restored and the daemon cleans up
-
-## Options
-
-```bash
-# Change keybinding (default: T)
-set -g @claude-teams-key 'C'
-
-# Custom claude binary path
-set -g @claude-teams-claude-bin '/path/to/claude'
+```
+Claude Code --[hooks]--> hook scripts --[unix socket]--> Go daemon ---> tmux panes
 ```
 
-## Architecture
+1. Daemon starts on tmux init, listens on `/tmp/claude-teams.sock`
+2. Claude Code `PreToolUse` hook fires when Agent tool is called
+3. Hook script detects which tmux pane Claude is in (PID walk)
+4. Daemon creates a split pane showing agent status
+5. `PostToolUse` hook notifies completion, pane auto-closes after 3s
 
-```
-Claude Code ──[hooks]──> hook scripts ──[unix socket]──> Go daemon ──> tmux panes
-```
+## Uninstall
 
-The Go daemon (auto-built on first run) manages pane lifecycle. Hook scripts are injected into `~/.claude/settings.local.json` for the session and restored on exit.
+Remove hooks from `~/.claude/settings.json` (entries containing "claude-teams") and remove the `run-shell` line from tmux.conf.
 
 ## License
 
