@@ -30,7 +30,7 @@ cat > "$WRAPPER" << EOF
 export PATH="$SHIM_DIR:\$PATH"
 export CLAUDE_TEAMS_REAL_TMUX="$REAL_TMUX"
 export CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS=1
-exec "$CLAUDE_ABS" "\$@"
+exec "$CLAUDE_ABS" --agent-teams "\$@"
 EOF
 chmod +x "$WRAPPER"
 
